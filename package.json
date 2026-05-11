@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:cycle": "bash scripts/dev-cycle.sh",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "prod:build": "docker compose -f docker-compose.prod.yml build",
