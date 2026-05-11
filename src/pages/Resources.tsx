@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import { resourcesApi, projectsApi, settingsApi } from '../store/api'
 import { Resource, Project } from '../types'
+import { AuthUser } from '../store/api'
+
+type ResourcesOutletContext = {
+  currentUser: AuthUser | null
+}
 
 const EMPTY_FORM = {
   name: '',
@@ -14,6 +20,7 @@ export default function Resources() {
   const [resources, setResources] = useState<Resource[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [defaultQuota, setDefaultQuota] = useState(21)
+  const { currentUser } = useOutletContext<ResourcesOutletContext>()
 
   useEffect(() => {
     resourcesApi.getAll().then(setResources)
@@ -28,7 +35,7 @@ export default function Resources() {
 
   const openCreate = () => {
     setEditing(null)
-    setForm({ ...EMPTY_FORM, annualLeaveBalance: defaultQuota })
+    setForm({ ...EMPTY_FORM, role: currentUser?.role ?? '', annualLeaveBalance: defaultQuota })
     setShowModal(true)
   }
 
@@ -125,12 +132,13 @@ export default function Resources() {
               </div>
               <div>
                 <label className="label">Role / Title</label>
-                <select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-                  <option value="">— Select role —</option>
-                  <option value="Android">Android</option>
-                  <option value="iOS">iOS</option>
-                  <option value="MAS">MAS</option>
-                </select>
+                <input
+                  className="input bg-gray-100 text-gray-600"
+                  value={currentUser?.role ?? form.role}
+                  readOnly
+                  tabIndex={-1}
+                />
+                <p className="mt-1 text-xs text-gray-400">This is taken from your login role.</p>
               </div>
               <div>
                 <label className="label">Annual Leave Balance (days)</label>

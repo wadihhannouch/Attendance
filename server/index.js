@@ -1,10 +1,13 @@
 import express from 'express'
 import Database from 'better-sqlite3'
 import cors from 'cors'
-import { randomBytes } from 'crypto'
+import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
 import { mkdirSync } from 'fs'
 
 const DATA_DIR = process.env.DATA_DIR ?? './data'
+const SESSION_TTL_DAYS = 14
+const CORS_ORIGIN = process.env.CORS_ORIGIN ?? '*'
+
 mkdirSync(DATA_DIR, { recursive: true })
 
 const db = new Database(`${DATA_DIR}/attendance.db`)
@@ -51,6 +54,24 @@ db.exec(`
     public_holidays      TEXT    NOT NULL DEFAULT '[]'
   );
 
+  CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    username      TEXT NOT NULL UNIQUE,
+    display_name  TEXT NOT NULL,
+    role          TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    password_salt TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    token      TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
   INSERT OR IGNORE INTO settings (id) VALUES (1);
 `)
 
@@ -61,6 +82,66 @@ if (!leafCols.includes('handover_items')) {
 }
 
 const genId = () => randomBytes(8).toString('hex')
+const genToken = () => randomBytes(24).toString('hex')
+
+const hashPassword = (password, salt = randomBytes(16).toString('hex')) => ({
+  salt,
+  hash: scryptSync(password, salt, 64).toString('hex'),
+})
+
+const verifyPassword = (password, passwordHash, passwordSalt) => {
+  const computedHash = scryptSync(password, passwordSalt, 64)
+  const storedHash = Buffer.from(passwordHash, 'hex')
+  return storedHash.length === computedHash.length && timingSafeEqual(storedHash, computedHash)
+}
+
+const mapUser = (row) => ({
+  id: row.id,
+  username: row.username,
+  displayName: row.display_name,
+  role: row.role,
+  createdAt: row.created_at,
+})
+
+const ensureDefaultUsers = () => {
+  const now = new Date().toISOString()
+  const defaultUsers = [
+    { username: 'admin', displayName: 'Administrator', role: 'Admin', password: 'admin123' },
+    { username: 'superuser', displayName: 'Super User', role: 'SuperUser', password: 'super123' },
+    { username: 'android', displayName: 'Android Lead', role: 'Android', password: 'android123' },
+    { username: 'ios', displayName: 'iOS Lead', role: 'iOS', password: 'ios12345' },
+    { username: 'mas', displayName: 'MAS Lead', role: 'MAS', password: 'mas12345' },
+  ]
+
+  const insertUser = db.prepare('INSERT INTO users (id, username, display_name, role, password_hash, password_salt, created_at) VALUES (?,?,?,?,?,?,?)')
+  for (const user of defaultUsers) {
+    const exists = db.prepare('SELECT id FROM users WHERE username = ?').get(user.username)
+    if (exists) continue
+    const { hash, salt } = hashPassword(user.password)
+    insertUser.run(genId(), user.username, user.displayName, user.role, hash, salt, now)
+  }
+}
+
+ensureDefaultUsers()
+
+const getSessionUser = (token) => {
+  if (!token) return null
+
+  const row = db.prepare(`
+    SELECT s.token, s.expires_at, u.*
+    FROM sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.token = ?
+  `).get(token)
+
+  if (!row) return null
+  if (row.expires_at <= new Date().toISOString()) {
+    db.prepare('DELETE FROM sessions WHERE token = ?').run(token)
+    return null
+  }
+
+  return mapUser(row)
+}
 
 // ─── Mappers ──────────────────────────────────────────────────────────────────
 const mapResource = (row) => ({
@@ -95,16 +176,84 @@ const mapProject = (row) => ({
   createdAt: row.created_at,
 })
 
+const hasGlobalAccess = (user) => user?.role === 'Admin' || user?.role === 'SuperUser'
+
+const getAccessibleResources = (user) => {
+  if (hasGlobalAccess(user)) {
+    return db.prepare('SELECT * FROM resources ORDER BY created_at').all()
+  }
+  return db.prepare('SELECT * FROM resources WHERE role = ? ORDER BY created_at').all(user.role)
+}
+
+const getAccessibleResourceIds = (user) => new Set(getAccessibleResources(user).map((resource) => resource.id))
+
+const ensureResourceAccess = (user, resourceId) => {
+  if (hasGlobalAccess(user)) return true
+  const row = db.prepare('SELECT id FROM resources WHERE id = ? AND role = ?').get(resourceId, user.role)
+  return Boolean(row)
+}
+
+const getAccessibleProjects = () => db.prepare('SELECT * FROM projects ORDER BY created_at').all()
+
+const getAccessibleLeaves = (user) => {
+  const accessibleResourceIds = getAccessibleResourceIds(user)
+  return db.prepare('SELECT * FROM leaves ORDER BY created_at DESC').all().filter((leave) => accessibleResourceIds.has(leave.resource_id))
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 const app = express()
-app.use(cors())
+app.use(cors({
+  origin: CORS_ORIGIN === '*' ? true : CORS_ORIGIN.split(',').map((origin) => origin.trim()),
+}))
 app.use(express.json())
 
 app.get('/api/health', (_, res) => res.json({ ok: true }))
 
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body ?? {}
+  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username)
+  if (!user || !verifyPassword(password ?? '', user.password_hash, user.password_salt)) {
+    return res.status(401).json({ error: 'Invalid credentials' })
+  }
+
+  const token = genToken()
+  const now = new Date()
+  const expiresAt = new Date(now)
+  expiresAt.setDate(expiresAt.getDate() + SESSION_TTL_DAYS)
+  db.prepare('INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)').run(token, user.id, now.toISOString(), expiresAt.toISOString())
+  res.json({ token, user: mapUser(user) })
+})
+
+app.get('/api/session', (req, res) => {
+  const authHeader = req.headers.authorization ?? ''
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+  const user = getSessionUser(token)
+  if (!user) return res.status(401).json({ error: 'Unauthorized' })
+  res.json({ user })
+})
+
+app.post('/api/logout', (req, res) => {
+  const authHeader = req.headers.authorization ?? ''
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+  if (token) db.prepare('DELETE FROM sessions WHERE token = ?').run(token)
+  res.json({ ok: true })
+})
+
+app.use('/api', (req, res, next) => {
+  const publicPaths = new Set(['/health', '/login', '/seed'])
+  if (publicPaths.has(req.path)) return next()
+
+  const authHeader = req.headers.authorization ?? ''
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+  const user = getSessionUser(token)
+  if (!user) return res.status(401).json({ error: 'Unauthorized' })
+  req.user = user
+  next()
+})
+
 // ── Projects ──────────────────────────────────────────────────────────────────
-app.get('/api/projects', (_, res) => {
-  res.json(db.prepare('SELECT * FROM projects ORDER BY created_at').all().map(mapProject))
+app.get('/api/projects', (req, res) => {
+  res.json(getAccessibleProjects().map(mapProject))
 })
 
 app.post('/api/projects', (req, res) => {
@@ -128,12 +277,15 @@ app.delete('/api/projects/:id', (req, res) => {
 })
 
 // ── Resources ─────────────────────────────────────────────────────────────────
-app.get('/api/resources', (_, res) => {
-  res.json(db.prepare('SELECT * FROM resources ORDER BY created_at').all().map(mapResource))
+app.get('/api/resources', (req, res) => {
+  res.json(getAccessibleResources(req.user).map(mapResource))
 })
 
 app.post('/api/resources', (req, res) => {
   const { name, email = '', role = '', projectIds = [], annualLeaveBalance = 21 } = req.body
+  if (!hasGlobalAccess(req.user) && role !== req.user.role) {
+    return res.status(403).json({ error: `Only ${req.user.role} resources are allowed for your account` })
+  }
   const id = genId()
   db.prepare('INSERT INTO resources VALUES (?,?,?,?,?,?,?)').run(id, name, email, role, JSON.stringify(projectIds), annualLeaveBalance, new Date().toISOString())
   res.status(201).json(mapResource(db.prepare('SELECT * FROM resources WHERE id=?').get(id)))
@@ -141,6 +293,12 @@ app.post('/api/resources', (req, res) => {
 
 app.put('/api/resources/:id', (req, res) => {
   const { name, email = '', role = '', projectIds = [], annualLeaveBalance = 21 } = req.body
+  if (!ensureResourceAccess(req.user, req.params.id)) {
+    return res.status(403).json({ error: 'You are not allowed to modify this resource' })
+  }
+  if (!hasGlobalAccess(req.user) && role !== req.user.role) {
+    return res.status(403).json({ error: `Only ${req.user.role} resources are allowed for your account` })
+  }
   db.prepare('UPDATE resources SET name=?, email=?, role=?, project_ids=?, annual_leave_balance=? WHERE id=?').run(name, email, role, JSON.stringify(projectIds), annualLeaveBalance, req.params.id)
   const row = db.prepare('SELECT * FROM resources WHERE id=?').get(req.params.id)
   if (!row) return res.status(404).json({ error: 'Not found' })
@@ -148,17 +306,26 @@ app.put('/api/resources/:id', (req, res) => {
 })
 
 app.delete('/api/resources/:id', (req, res) => {
+  if (!ensureResourceAccess(req.user, req.params.id)) {
+    return res.status(403).json({ error: 'You are not allowed to remove this resource' })
+  }
   db.prepare('DELETE FROM resources WHERE id=?').run(req.params.id)
   res.json({ ok: true })
 })
 
 // ── Leaves ────────────────────────────────────────────────────────────────────
-app.get('/api/leaves', (_, res) => {
-  res.json(db.prepare('SELECT * FROM leaves ORDER BY created_at DESC').all().map(mapLeave))
+app.get('/api/leaves', (req, res) => {
+  res.json(getAccessibleLeaves(req.user).map(mapLeave))
 })
 
 app.post('/api/leaves', (req, res) => {
   const { resourceId, type, otherLabel, startDate, endDate, status = 'pending', deputyId, notes = '', handoverItems = [] } = req.body
+  if (!ensureResourceAccess(req.user, resourceId)) {
+    return res.status(403).json({ error: 'You are not allowed to create a leave for this team member' })
+  }
+  if (deputyId && !ensureResourceAccess(req.user, deputyId)) {
+    return res.status(403).json({ error: 'Deputy must belong to your scoped role' })
+  }
   const id = genId()
   db.prepare('INSERT INTO leaves (id,resource_id,type,other_label,start_date,end_date,status,deputy_id,notes,handover_items,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(id, resourceId, type, otherLabel ?? null, startDate, endDate, status, deputyId ?? null, notes, JSON.stringify(handoverItems), new Date().toISOString())
   res.status(201).json(mapLeave(db.prepare('SELECT * FROM leaves WHERE id=?').get(id)))
@@ -166,13 +333,25 @@ app.post('/api/leaves', (req, res) => {
 
 app.put('/api/leaves/:id', (req, res) => {
   const { resourceId, type, otherLabel, startDate, endDate, status, deputyId, notes = '', handoverItems = [] } = req.body
+  const existing = db.prepare('SELECT * FROM leaves WHERE id=?').get(req.params.id)
+  if (!existing) return res.status(404).json({ error: 'Not found' })
+  if (!ensureResourceAccess(req.user, existing.resource_id) || !ensureResourceAccess(req.user, resourceId)) {
+    return res.status(403).json({ error: 'You are not allowed to modify this leave' })
+  }
+  if (deputyId && !ensureResourceAccess(req.user, deputyId)) {
+    return res.status(403).json({ error: 'Deputy must belong to your scoped role' })
+  }
   db.prepare('UPDATE leaves SET resource_id=?, type=?, other_label=?, start_date=?, end_date=?, status=?, deputy_id=?, notes=?, handover_items=? WHERE id=?').run(resourceId, type, otherLabel ?? null, startDate, endDate, status, deputyId ?? null, notes, JSON.stringify(handoverItems), req.params.id)
   const row = db.prepare('SELECT * FROM leaves WHERE id=?').get(req.params.id)
-  if (!row) return res.status(404).json({ error: 'Not found' })
   res.json(mapLeave(row))
 })
 
 app.delete('/api/leaves/:id', (req, res) => {
+  const existing = db.prepare('SELECT * FROM leaves WHERE id=?').get(req.params.id)
+  if (!existing) return res.status(404).json({ error: 'Not found' })
+  if (!ensureResourceAccess(req.user, existing.resource_id)) {
+    return res.status(403).json({ error: 'You are not allowed to remove this leave' })
+  }
   db.prepare('DELETE FROM leaves WHERE id=?').run(req.params.id)
   res.json({ ok: true })
 })
@@ -225,14 +404,15 @@ app.post('/api/seed', (req, res) => {
     db.prepare('UPDATE settings SET leave_types=?, public_holidays=? WHERE id=1').run(
       JSON.stringify(['Annual', 'Sick', 'Emergency', 'Other']),
       JSON.stringify([
-        { date: '2026-01-01', label: 'New Year\'s Day' },
-        { date: '2026-02-25', label: 'National Day' },
-        { date: '2026-02-26', label: 'Liberation Day' },
-        { date: '2026-04-02', label: 'Eid al-Fitr (estimated)' },
-        { date: '2026-04-03', label: 'Eid al-Fitr Holiday (estimated)' },
-        { date: '2026-06-15', label: 'Arafat Day' },
-        { date: '2026-06-16', label: 'Eid al-Adha (estimated)' },
-        { date: '2026-06-17', label: 'Eid al-Adha Holiday (estimated)' }
+        { startDate: '2026-01-01', endDate: '2026-01-01', label: 'New Year\'s Day' },
+        { startDate: '2026-01-16', endDate: '2026-01-16', label: 'Isra and Mi\'raj' },
+        { startDate: '2026-02-25', endDate: '2026-02-25', label: 'National Day' },
+        { startDate: '2026-02-26', endDate: '2026-02-26', label: 'Liberation Day' },
+        { startDate: '2026-03-20', endDate: '2026-03-22', label: 'Eid al-Fitr (tentative)' },
+        { startDate: '2026-05-26', endDate: '2026-05-26', label: 'Waqfat Arafat Day (tentative)' },
+        { startDate: '2026-05-27', endDate: '2026-05-29', label: 'Eid al-Adha (tentative)' },
+        { startDate: '2026-06-16', endDate: '2026-06-16', label: 'Islamic New Year (tentative)' },
+        { startDate: '2026-08-27', endDate: '2026-08-27', label: 'The Prophet\'s Birthday (tentative)' }
       ])
     )
   })

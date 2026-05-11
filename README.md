@@ -9,12 +9,18 @@ A full-stack app to manage project teams, annual leave, attendance availability,
 - Leave request workflow (pending, approved, rejected)
 - Deputy assignment during leave
 - Handover checklist per leave request
+- Role-based authentication with persisted sessions
+- Super user access for full visibility across all projects, team members, and leaves
 - Dashboard with:
   - nearest upcoming leave per member
   - countdown to leave start
   - return countdown for members currently on leave
   - task completion toggles for handover items
+  - per-project CSV export (including handover task details)
 - Calendar view for leave visibility
+- Calendar workweek from Sunday to Thursday
+- Non-working days (Friday/Saturday) shown but non-interactive
+- Public holidays support date ranges (including tentative holiday styling)
 - Settings for leave types and public holidays
 
 ## Tech Stack
@@ -99,6 +105,30 @@ docker compose down
 - Backend includes a migration guard for new columns like `handover_items`.
 - Frontend seeds sample data on app start via `/api/seed` (only once).
 
+## Authentication
+
+Login endpoint: `POST /api/login`
+
+Default users:
+
+- `admin / admin123` (role: Admin, global access)
+- `superuser / super123` (role: SuperUser, global access)
+- `android / android123` (role: Android)
+- `ios / ios12345` (role: iOS)
+- `mas / mas12345` (role: MAS)
+
+Notes:
+
+- Sessions are stored in SQLite (`sessions` table) with expiry.
+- Role-scoped users only see/manipulate resources and leaves within their role.
+- Admin and SuperUser have full access across the app.
+
+## CSV Export
+
+- Leave Requests page: `Export All CSV`
+- Dashboard: per-project `Export CSV` button on each project card
+- Exported data includes leave/member details and handover progress/tasks
+
 ## Screenshots
 
 Add product screenshots under `docs/screenshots/` and update the image links below.
@@ -155,10 +185,35 @@ Frontend (`/`):
 - `npm run dev` - Start Vite dev server
 - `npm run build` - Build frontend for production
 - `npm run preview` - Preview production build
+- `npm run prod:build` - Build production frontend + backend images
+- `npm run prod:up` - Start full production stack (frontend nginx + backend)
+- `npm run prod:down` - Stop production stack
 
 Backend (`/server`):
 
 - `npm run dev` - Start API server with Node
+
+## Production Deployment (Docker)
+
+Build and run production stack:
+
+```bash
+npm run prod:build
+npm run prod:up
+```
+
+This uses:
+
+- `docker-compose.prod.yml`
+- Root `Dockerfile` (frontend build + nginx runtime)
+- `server/Dockerfile` (Express API)
+- `nginx.prod.conf` (SPA routing + `/api` reverse proxy)
+
+Stop production stack:
+
+```bash
+npm run prod:down
+```
 
 ## Common Troubleshooting
 

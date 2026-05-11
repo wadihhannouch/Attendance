@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { leavesApi, resourcesApi, projectsApi } from '../store/api'
-import { Leave, Resource, Project } from '../types'
+import { leavesApi, resourcesApi, projectsApi, settingsApi } from '../store/api'
+import { Leave, Resource, Project, Settings, PublicHoliday } from '../types'
 import { isWithinInterval, parseISO, addDays, format, differenceInCalendarDays, differenceInBusinessDays } from 'date-fns'
 
 export default function Dashboard() {
@@ -12,14 +12,21 @@ export default function Dashboard() {
   const [leaves, setLeaves] = useState<Leave[]>([])
   const [resources, setResources] = useState<Resource[]>([])
   const [projects, setProjects] = useState<Project[]>([])
+  const [settings, setSettings] = useState<Settings>({ leaveTypes: [], defaultAnnualQuota: 21, publicHolidays: [] })
 
   useEffect(() => {
     leavesApi.getAll().then(setLeaves)
     resourcesApi.getAll().then(setResources)
     projectsApi.getAll().then(setProjects)
+    settingsApi.get().then(setSettings)
   }, [])
 
   const getResource = (id: string) => resources.find((r) => r.id === id)
+  const normalizeHoliday = (holiday: PublicHoliday): PublicHoliday => ({
+    label: holiday.label,
+    startDate: holiday.startDate ?? holiday.date ?? '',
+    endDate: holiday.endDate ?? holiday.startDate ?? holiday.date ?? '',
+  })
 
   const handleToggleTask = (leaveId: string, itemId: string) => {
     const leave = leaves.find((l) => l.id === leaveId)
@@ -49,6 +56,11 @@ export default function Dashboard() {
 
   const totalOut = leaves.filter(isOutToday).length
   const totalPending = leaves.filter((l) => l.status === 'pending').length
+  const nextHoliday = settings.publicHolidays
+    .map(normalizeHoliday)
+    .filter((holiday) => holiday.startDate && holiday.endDate && holiday.endDate >= todayStr)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate))[0]
+  const holidayCountdown = nextHoliday ? Math.max(0, differenceInCalendarDays(parseISO(nextHoliday.startDate), today)) : null
 
   return (
     <div className="space-y-6">
@@ -64,6 +76,29 @@ export default function Dashboard() {
         <StatCard label="Out Today" value={totalOut} color="red" />
         <StatCard label="Pending Leaves" value={totalPending} color="yellow" />
       </div>
+
+      {nextHoliday && holidayCountdown !== null && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Upcoming Holiday</p>
+              <h3 className="mt-1 text-lg font-semibold text-gray-800">{nextHoliday.label}</h3>
+              <p className="text-sm text-gray-600">
+                {format(parseISO(nextHoliday.startDate), 'dd MMM yyyy')}
+                {nextHoliday.startDate !== nextHoliday.endDate && ` → ${format(parseISO(nextHoliday.endDate), 'dd MMM yyyy')}`}
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="rounded-full bg-white px-4 py-2 text-center shadow-sm ring-1 ring-amber-200">
+                <p className="text-xs uppercase tracking-wide text-gray-400">Countdown</p>
+                <p className="text-lg font-bold text-amber-700">
+                  {holidayCountdown === 0 ? 'Today' : `${holidayCountdown} day${holidayCountdown === 1 ? '' : 's'}`}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Per-project cards */}
       {projects.length === 0 ? (
@@ -101,6 +136,7 @@ interface ProjectCardProps {
 }
 
 function ProjectCard({ project, resources, leaves, today, isOutToday, isUpcoming, getResource, onToggleTask }: ProjectCardProps) {
+  const [expanded, setExpanded] = useState(true)
   const members = resources.filter((r) => r.projectIds.includes(project.id))
   const memberIds = new Set(members.map((r) => r.id))
 
@@ -125,6 +161,59 @@ function ProjectCard({ project, resources, leaves, today, isOutToday, isUpcoming
   const workingDaysUntilReturn = (endDateStr: string) =>
     Math.max(0, differenceInBusinessDays(addDays(parseISO(endDateStr), 1), today))
 
+  const csvEscape = (value: string | number) => {
+    const text = String(value)
+    if (/[",\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`
+    return text
+  }
+
+  const exportProjectLeaves = () => {
+    if (projectLeaves.length === 0) return
+
+    const rows = projectLeaves
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map((leave) => {
+        const member = getResource(leave.resourceId)
+        const deputy = leave.deputyId ? getResource(leave.deputyId) : undefined
+        const handoverItems = leave.handoverItems ?? []
+        const handoverDone = handoverItems.filter((item) => item.done).length
+        const doneTasks = handoverItems.filter((item) => item.done).map((item) => item.text).join(' | ')
+        const pendingTasks = handoverItems.filter((item) => !item.done).map((item) => item.text).join(' | ')
+        const allTasks = handoverItems.map((item) => `${item.done ? '[x]' : '[ ]'} ${item.text}`).join(' | ')
+        return {
+          leaveId: leave.id,
+          project: project.name,
+          memberName: member?.name ?? '—',
+          memberRole: member?.role ?? '—',
+          leaveType: leave.type === 'other' && leave.otherLabel ? leave.otherLabel : leave.type,
+          startDate: leave.startDate,
+          endDate: leave.endDate,
+          status: leave.status,
+          deputy: deputy?.name ?? '—',
+          handoverDone: `${handoverDone}/${handoverItems.length}`,
+          handoverTasks: allTasks,
+          handoverDoneTasks: doneTasks,
+          handoverPendingTasks: pendingTasks,
+          notes: leave.notes ?? '',
+          createdAt: leave.createdAt,
+        }
+      })
+
+    const headers = Object.keys(rows[0])
+    const body = rows.map((row) => headers.map((header) => csvEscape(row[header as keyof typeof row])).join(','))
+    const csv = [headers.join(','), ...body].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const fileName = `leaves-${project.name.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}.csv`
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fileName
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       {/* Project header */}
@@ -144,11 +233,28 @@ function ProjectCard({ project, resources, leaves, today, isOutToday, isUpcoming
           {pending.length > 0 && (
             <span className="bg-yellow-100 text-yellow-600 font-semibold px-2 py-0.5 rounded-full">{pending.length} pending</span>
           )}
+          <button
+            type="button"
+            onClick={exportProjectLeaves}
+            disabled={projectLeaves.length === 0}
+            className="inline-flex items-center rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Export CSV
+          </button>
           <Link to={`/projects/${project.id}`} className="text-blue-600 hover:underline">Manage →</Link>
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="inline-flex items-center rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
+            aria-label={expanded ? `Collapse ${project.name}` : `Expand ${project.name}`}
+          >
+            {expanded ? 'Collapse ↑' : 'Expand ↓'}
+          </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-gray-100">
+      {expanded && (
+        <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-gray-100">
         {/* Members & availability */}
         <div className="p-4">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Team</p>
@@ -328,7 +434,8 @@ function ProjectCard({ project, resources, leaves, today, isOutToday, isUpcoming
             <Link to="/leaves/new" className="mt-3 inline-block text-xs text-blue-600 hover:underline">+ New leave request</Link>
           )}
         </div>
-      </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -4,12 +4,12 @@ import { format, parse, startOfWeek, getDay, parseISO, addDays } from 'date-fns'
 import { enUS } from 'date-fns/locale/en-US'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
 import { leavesApi, resourcesApi, projectsApi, settingsApi } from '../store/api'
-import { Leave, Resource, Project, Settings } from '../types'
+import { Leave, Resource, Project, Settings, PublicHoliday } from '../types'
 
 const localizer = dateFnsLocalizer({
   format,
   parse,
-  startOfWeek: () => startOfWeek(new Date(), { weekStartsOn: 1 }),
+  startOfWeek: () => startOfWeek(new Date(), { weekStartsOn: 0 }),
   getDay,
   locales: { 'en-US': enUS },
 })
@@ -22,6 +22,7 @@ interface CalEvent {
   color: string
   leave?: Leave
   isHoliday?: boolean
+  isTentativeHoliday?: boolean
 }
 
 export default function CalendarPage() {
@@ -48,6 +49,20 @@ export default function CalendarPage() {
     return projects.find((p) => p.id === res.projectIds[0])?.color ?? '#6B7280'
   }
 
+  const normalizeHoliday = (holiday: PublicHoliday): PublicHoliday => ({
+    label: holiday.label,
+    startDate: holiday.startDate ?? holiday.date ?? '',
+    endDate: holiday.endDate ?? holiday.startDate ?? holiday.date ?? '',
+  })
+
+  const isNonWorkingDay = (day: Date) => {
+    const weekDay = getDay(day)
+    return weekDay === 5 || weekDay === 6
+  }
+
+  const isTentativeHolidayLabel = (label: string) => label.toLowerCase().includes('(tentative)')
+  const cleanHolidayLabel = (label: string) => label.replace(/\s*\(tentative\)$/i, '')
+
   const events: CalEvent[] = useMemo(() => {
     const leaveEvents: CalEvent[] = leaves
       .filter((l) => l.status !== 'rejected')
@@ -63,14 +78,19 @@ export default function CalendarPage() {
         }
       })
 
-    const holidayEvents: CalEvent[] = settings.publicHolidays.map((h) => ({
-      id: `holiday-${h.date}`,
-      title: `🏖️ ${h.label}`,
-      start: parseISO(h.date),
-      end: addDays(parseISO(h.date), 1),
-      color: '#EF4444',
-      isHoliday: true,
-    }))
+    const holidayEvents: CalEvent[] = settings.publicHolidays.map(normalizeHoliday).map((h) => {
+      const isTentativeHoliday = isTentativeHolidayLabel(h.label)
+      const displayLabel = cleanHolidayLabel(h.label)
+      return {
+        id: `holiday-${h.startDate}-${h.endDate}-${displayLabel}`,
+        title: `${isTentativeHoliday ? '⏳' : '🏖️'} ${displayLabel}`,
+        start: parseISO(h.startDate),
+        end: addDays(parseISO(h.endDate), 1),
+        color: isTentativeHoliday ? '#F59E0B' : '#EF4444',
+        isHoliday: true,
+        isTentativeHoliday,
+      }
+    })
 
     return [...leaveEvents, ...holidayEvents]
   }, [leaves, resources, projects, settings])
@@ -80,11 +100,24 @@ export default function CalendarPage() {
       backgroundColor: event.color,
       borderRadius: '4px',
       opacity: 0.9,
-      border: 'none',
+      border: event.isTentativeHoliday ? '1px dashed rgba(255,255,255,0.9)' : 'none',
       color: '#fff',
       fontSize: '12px',
     },
   })
+
+  const dayStyleGetter = (day: Date) => {
+    if (!isNonWorkingDay(day)) return {}
+    return {
+      style: {
+        backgroundColor: '#F8FAFC',
+        opacity: 0.65,
+        pointerEvents: 'none' as const,
+        filter: 'grayscale(0.15)',
+      },
+      className: 'non-working-day',
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -106,6 +139,23 @@ export default function CalendarPage() {
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 text-xs text-gray-600">
+        <span className="font-semibold text-gray-700">Legend</span>
+        <span className="inline-flex items-center gap-2">
+          <span className="h-3 w-3 rounded bg-red-500" />
+          Confirmed holiday
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="h-3 w-3 rounded border border-dashed border-amber-600 bg-amber-500" />
+          Tentative holiday
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="h-3 w-3 rounded bg-slate-200" />
+          Friday / Saturday non-working days
+        </span>
+        <span className="text-gray-400">Working days: Sunday to Thursday</span>
+      </div>
+
       <div className="bg-white border border-gray-200 rounded-xl p-4" style={{ height: 620 }}>
         <Calendar
           localizer={localizer}
@@ -115,6 +165,7 @@ export default function CalendarPage() {
           date={date}
           onNavigate={setDate}
           eventPropGetter={eventStyleGetter}
+          dayPropGetter={dayStyleGetter}
           onSelectEvent={(e) => setSelected(e as CalEvent)}
           popup
         />
@@ -127,7 +178,16 @@ export default function CalendarPage() {
             {selected.isHoliday ? (
               <>
                 <h3 className="font-semibold text-gray-800 text-lg mb-1">{selected.title}</h3>
-                <p className="text-sm text-gray-500">{format(selected.start, 'dd MMM yyyy')}</p>
+                <p className="text-sm text-gray-500">
+                  {format(selected.start, 'dd MMM yyyy') === format(addDays(selected.end, -1), 'dd MMM yyyy')
+                    ? format(selected.start, 'dd MMM yyyy')
+                    : `${format(selected.start, 'dd MMM yyyy')} → ${format(addDays(selected.end, -1), 'dd MMM yyyy')}`}
+                </p>
+                {selected.isTentativeHoliday && (
+                  <p className="mt-2 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                    Tentative date
+                  </p>
+                )}
               </>
             ) : selected.leave ? (
               <>

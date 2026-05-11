@@ -40,8 +40,10 @@ export interface Leave {
 }
 
 export interface PublicHoliday {
-  date: string; // YYYY-MM-DD
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
   label: string;
+  date?: string; // legacy single-day support
 }
 
 export interface Settings {

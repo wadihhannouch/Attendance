@@ -1,19 +1,80 @@
+import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
-import Dashboard from './pages/Dashboard'
-import Projects from './pages/Projects'
-import ProjectDetail from './pages/ProjectDetail'
-import Resources from './pages/Resources'
-import Leaves from './pages/Leaves'
-import LeaveForm from './pages/LeaveForm'
-import CalendarPage from './pages/CalendarPage'
-import Settings from './pages/Settings'
+import Dashboard from './pages/Dashboard.tsx'
+import Projects from './pages/Projects.tsx'
+import ProjectDetail from './pages/ProjectDetail.tsx'
+import Resources from './pages/Resources.tsx'
+import Leaves from './pages/Leaves.tsx'
+import LeaveForm from './pages/LeaveForm.tsx'
+import CalendarPage from './pages/CalendarPage.tsx'
+import Settings from './pages/Settings.tsx'
+import Login from './pages/Login.tsx'
+import { authApi, authStorage, AuthUser } from './store/api'
 
 export default function App() {
+  const [authReady, setAuthReady] = useState(false)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [authError, setAuthError] = useState('')
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null)
+
+  useEffect(() => {
+    const token = authStorage.getToken()
+    if (!token) {
+      setAuthReady(true)
+      return
+    }
+
+    authApi.session()
+      .then((result) => {
+        setCurrentUser(result.user)
+        setIsAuthenticated(true)
+      })
+      .catch(() => {
+        authStorage.clearToken()
+        setIsAuthenticated(false)
+        setCurrentUser(null)
+      })
+      .finally(() => setAuthReady(true))
+  }, [])
+
+  const handleLogin = async (username: string, password: string) => {
+    setAuthError('')
+    try {
+      const result = await authApi.login(username, password)
+      authStorage.setToken(result.token)
+      setCurrentUser(result.user)
+      setIsAuthenticated(true)
+    } catch (error) {
+      setIsAuthenticated(false)
+      setCurrentUser(null)
+      setAuthError(error instanceof Error ? error.message : 'Login failed')
+    }
+  }
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout()
+    } catch {
+      // Best effort only.
+    }
+    authStorage.clearToken()
+    setIsAuthenticated(false)
+    setCurrentUser(null)
+  }
+
+  if (!authReady) {
+    return <div className="min-h-screen bg-gray-50 grid place-items-center text-sm text-gray-500">Loading…</div>
+  }
+
+  if (!isAuthenticated) {
+    return <Login onLogin={handleLogin} error={authError} />
+  }
+
   return (
     <BrowserRouter>
       <Routes>
-        <Route element={<Layout />}>
+        <Route element={<Layout onLogout={handleLogout} currentUser={currentUser} />}> 
           <Route index element={<Dashboard />} />
           <Route path="projects" element={<Projects />} />
           <Route path="projects/:id" element={<ProjectDetail />} />

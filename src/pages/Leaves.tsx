@@ -23,6 +23,14 @@ export default function Leaves() {
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
   const getResource = (id: string) => resources.find((r) => r.id === id)
+  const getProjectNames = (resourceId: string) => {
+    const resource = getResource(resourceId)
+    if (!resource) return '—'
+    const names = resource.projectIds
+      .map((projectId) => projects.find((project) => project.id === projectId)?.name)
+      .filter(Boolean)
+    return names.length > 0 ? names.join(' | ') : '—'
+  }
 
   const filtered = leaves.filter((l) => {
     if (filterStatus !== 'all' && l.status !== filterStatus) return false
@@ -39,6 +47,58 @@ export default function Leaves() {
     await leavesApi.remove(deleteId)
     setLeaves(await leavesApi.getAll())
     setDeleteId(null)
+  }
+
+  const csvEscape = (value: string | number) => {
+    const text = String(value)
+    if (/[",\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`
+    return text
+  }
+
+  const downloadCsv = (filename: string, rows: Array<Record<string, string | number>>) => {
+    if (rows.length === 0) return
+    const headers = Object.keys(rows[0])
+    const body = rows.map((row) => headers.map((header) => csvEscape(row[header])).join(','))
+    const csv = [headers.join(','), ...body].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const buildExportRows = (data: Leave[]) =>
+    data
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map((leave) => {
+        const member = getResource(leave.resourceId)
+        const deputy = leave.deputyId ? getResource(leave.deputyId) : undefined
+        const handoverItems = leave.handoverItems ?? []
+        const done = handoverItems.filter((item) => item.done).length
+        return {
+          leaveId: leave.id,
+          memberName: member?.name ?? '—',
+          memberRole: member?.role ?? '—',
+          projects: getProjectNames(leave.resourceId),
+          leaveType: leave.type === 'other' && leave.otherLabel ? leave.otherLabel : leave.type,
+          startDate: leave.startDate,
+          endDate: leave.endDate,
+          businessDays: businessDays(leave.startDate, leave.endDate),
+          status: leave.status,
+          deputy: deputy?.name ?? '—',
+          handoverDone: `${done}/${handoverItems.length}`,
+          notes: leave.notes ?? '',
+          createdAt: leave.createdAt,
+        }
+      })
+
+  const exportAllLeaves = () => {
+    const rows = buildExportRows(leaves)
+    downloadCsv(`leaves-all-${Date.now()}.csv`, rows)
   }
 
   const statusBadge = (s: LeaveStatus) => {
@@ -70,7 +130,10 @@ export default function Leaves() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold text-gray-800">Leave Requests</h2>
-        <Link to="/leaves/new" className="btn-primary">+ New Leave</Link>
+        <div className="flex items-center gap-2">
+          <button onClick={exportAllLeaves} className="btn-secondary">Export All CSV</button>
+          <Link to="/leaves/new" className="btn-primary">+ New Leave</Link>
+        </div>
       </div>
 
       {/* Filters */}
