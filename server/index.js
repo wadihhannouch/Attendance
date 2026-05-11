@@ -224,7 +224,16 @@ app.post('/api/seed', (req, res) => {
 
     db.prepare('UPDATE settings SET leave_types=?, public_holidays=? WHERE id=1').run(
       JSON.stringify(['Annual', 'Sick', 'Emergency', 'Other']),
-      JSON.stringify([{ date: fmt(addDays(today, 14)), label: 'Public Holiday' }])
+      JSON.stringify([
+        { date: '2026-01-01', label: 'New Year\'s Day' },
+        { date: '2026-02-25', label: 'National Day' },
+        { date: '2026-02-26', label: 'Liberation Day' },
+        { date: '2026-04-02', label: 'Eid al-Fitr (estimated)' },
+        { date: '2026-04-03', label: 'Eid al-Fitr Holiday (estimated)' },
+        { date: '2026-06-15', label: 'Arafat Day' },
+        { date: '2026-06-16', label: 'Eid al-Adha (estimated)' },
+        { date: '2026-06-17', label: 'Eid al-Adha Holiday (estimated)' }
+      ])
     )
   })
 
