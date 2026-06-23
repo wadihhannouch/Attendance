@@ -46,6 +46,36 @@ export interface PublicHoliday {
   date?: string; // legacy single-day support
 }
 
+export interface BusinessRequirement {
+  id: string;
+  reference: string;
+  title: string;
+  color: string;
+  projectIds: string[];
+  sprintId: string | null;
+  createdAt: string;
+}
+
+export interface BRTrackerEntry {
+  id: string;
+  brId: string;
+  resourceId: string;
+  timelineDays: number;
+  executionOrder: number;
+  createdAt: string;
+}
+
+export interface Sprint {
+  id: string;
+  title: string;
+  projectId: string;
+  startDate: string;
+  testingDate: string;
+  pilotDate: string;
+  productionDate: string;
+  createdAt: string;
+}
+
 export interface Settings {
   leaveTypes: string[];
   defaultAnnualQuota: number;

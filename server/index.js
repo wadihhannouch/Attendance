@@ -72,6 +72,36 @@ db.exec(`
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS business_requirements (
+    id          TEXT PRIMARY KEY,
+    reference   TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    color       TEXT NOT NULL DEFAULT '#3B82F6',
+    project_ids TEXT NOT NULL DEFAULT '[]',
+    sprint_id   TEXT,
+    created_at  TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS br_tracker (
+    id              TEXT    PRIMARY KEY,
+    br_id           TEXT    NOT NULL,
+    resource_id     TEXT    NOT NULL,
+    timeline_days   INTEGER NOT NULL DEFAULT 1,
+    execution_order INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT    NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS sprints (
+    id              TEXT PRIMARY KEY,
+    title           TEXT NOT NULL,
+    project_id      TEXT NOT NULL,
+    start_date      TEXT NOT NULL,
+    testing_date    TEXT NOT NULL,
+    pilot_date      TEXT NOT NULL,
+    production_date TEXT NOT NULL,
+    created_at      TEXT NOT NULL
+  );
+
   INSERT OR IGNORE INTO settings (id) VALUES (1);
 `)
 
@@ -80,6 +110,19 @@ const leafCols = db.prepare(`SELECT name FROM pragma_table_info('leaves')`).all(
 if (!leafCols.includes('handover_items')) {
   db.exec(`ALTER TABLE leaves ADD COLUMN handover_items TEXT NOT NULL DEFAULT '[]'`)
 }
+
+const brCols = db.prepare(`SELECT name FROM pragma_table_info('business_requirements')`).all().map((r) => r.name)
+if (!brCols.includes('project_ids')) {
+  db.exec(`ALTER TABLE business_requirements ADD COLUMN project_ids TEXT NOT NULL DEFAULT '[]'`)
+}
+const brColsNew = db.prepare(`SELECT name FROM pragma_table_info('business_requirements')`).all().map((r) => r.name)
+if (!brColsNew.includes('sprint_id')) {
+  db.exec(`ALTER TABLE business_requirements ADD COLUMN sprint_id TEXT`)
+}
+
+// Fix rows where created_at and project_ids were swapped by an earlier positional INSERT bug.
+// Corrupted rows have an ISO date in project_ids (doesn't start with '[').
+db.prepare(`UPDATE business_requirements SET created_at = project_ids, project_ids = created_at WHERE project_ids NOT LIKE '[%'`).run()
 
 const genId = () => randomBytes(8).toString('hex')
 const genToken = () => randomBytes(24).toString('hex')
@@ -173,6 +216,32 @@ const mapProject = (row) => ({
   name: row.name,
   description: row.description,
   color: row.color,
+  createdAt: row.created_at,
+})
+
+const mapBR = (row) => {
+  let projectIds = []
+  try { projectIds = JSON.parse(row.project_ids ?? '[]') } catch {}
+  return { id: row.id, reference: row.reference, title: row.title, color: row.color, projectIds, sprintId: row.sprint_id ?? null, createdAt: row.created_at }
+}
+
+const mapBRTracker = (row) => ({
+  id: row.id,
+  brId: row.br_id,
+  resourceId: row.resource_id,
+  timelineDays: row.timeline_days,
+  executionOrder: row.execution_order,
+  createdAt: row.created_at,
+})
+
+const mapSprint = (row) => ({
+  id: row.id,
+  title: row.title,
+  projectId: row.project_id,
+  startDate: row.start_date,
+  testingDate: row.testing_date,
+  pilotDate: row.pilot_date,
+  productionDate: row.production_date,
   createdAt: row.created_at,
 })
 
@@ -276,7 +345,89 @@ app.delete('/api/projects/:id', (req, res) => {
   res.json({ ok: true })
 })
 
+// ── Business Requirements ──────────────────────────────────────────────────────
+app.get('/api/brs', (req, res) => {
+  res.json(db.prepare('SELECT * FROM business_requirements ORDER BY created_at').all().map(mapBR))
+})
+
+app.post('/api/brs', (req, res) => {
+  const { reference, title, color = '#3B82F6', projectIds = [], sprintId = null } = req.body
+  const id = genId()
+  db.prepare('INSERT INTO business_requirements (id, reference, title, color, project_ids, sprint_id, created_at) VALUES (?,?,?,?,?,?,?)').run(id, reference, title, color, JSON.stringify(projectIds), sprintId, new Date().toISOString())
+  res.status(201).json(mapBR(db.prepare('SELECT * FROM business_requirements WHERE id=?').get(id)))
+})
+
+app.put('/api/brs/:id', (req, res) => {
+  const { reference, title, color = '#3B82F6', projectIds = [], sprintId = null } = req.body
+  db.prepare('UPDATE business_requirements SET reference=?, title=?, color=?, project_ids=?, sprint_id=? WHERE id=?').run(reference, title, color, JSON.stringify(projectIds), sprintId, req.params.id)
+  const row = db.prepare('SELECT * FROM business_requirements WHERE id=?').get(req.params.id)
+  if (!row) return res.status(404).json({ error: 'Not found' })
+  res.json(mapBR(row))
+})
+
+app.delete('/api/brs/:id', (req, res) => {
+  db.prepare('DELETE FROM business_requirements WHERE id=?').run(req.params.id)
+  res.json({ ok: true })
+})
+
+// ── BR Tracker ────────────────────────────────────────────────────────────────
+app.get('/api/br-tracker', (req, res) => {
+  res.json(db.prepare('SELECT * FROM br_tracker ORDER BY execution_order, created_at').all().map(mapBRTracker))
+})
+
+app.post('/api/br-tracker', (req, res) => {
+  const { brId, resourceId, timelineDays = 1, executionOrder = 1 } = req.body
+  const id = genId()
+  db.prepare('INSERT INTO br_tracker VALUES (?,?,?,?,?,?)').run(id, brId, resourceId, timelineDays, executionOrder, new Date().toISOString())
+  res.status(201).json(mapBRTracker(db.prepare('SELECT * FROM br_tracker WHERE id=?').get(id)))
+})
+
+app.put('/api/br-tracker/:id', (req, res) => {
+  const { brId, resourceId, timelineDays = 1, executionOrder = 1 } = req.body
+  db.prepare('UPDATE br_tracker SET br_id=?, resource_id=?, timeline_days=?, execution_order=? WHERE id=?').run(brId, resourceId, timelineDays, executionOrder, req.params.id)
+  const row = db.prepare('SELECT * FROM br_tracker WHERE id=?').get(req.params.id)
+  if (!row) return res.status(404).json({ error: 'Not found' })
+  res.json(mapBRTracker(row))
+})
+
+app.delete('/api/br-tracker/:id', (req, res) => {
+  db.prepare('DELETE FROM br_tracker WHERE id=?').run(req.params.id)
+  res.json({ ok: true })
+})
+
+// ── Sprints ───────────────────────────────────────────────────────────────────
+app.get('/api/sprints', (req, res) => {
+  res.json(db.prepare('SELECT * FROM sprints ORDER BY start_date, created_at').all().map(mapSprint))
+})
+
+app.post('/api/sprints', (req, res) => {
+  const { title, projectId, startDate, testingDate, pilotDate, productionDate } = req.body
+  if (!title || !projectId || !startDate || !testingDate || !pilotDate || !productionDate) {
+    return res.status(400).json({ error: 'Missing required fields' })
+  }
+  const id = genId()
+  db.prepare('INSERT INTO sprints (id, title, project_id, start_date, testing_date, pilot_date, production_date, created_at) VALUES (?,?,?,?,?,?,?,?)').run(id, title, projectId, startDate, testingDate, pilotDate, productionDate, new Date().toISOString())
+  res.status(201).json(mapSprint(db.prepare('SELECT * FROM sprints WHERE id=?').get(id)))
+})
+
+app.put('/api/sprints/:id', (req, res) => {
+  const { title, projectId, startDate, testingDate, pilotDate, productionDate } = req.body
+  const existing = db.prepare('SELECT * FROM sprints WHERE id=?').get(req.params.id)
+  if (!existing) return res.status(404).json({ error: 'Not found' })
+  db.prepare('UPDATE sprints SET title=?, project_id=?, start_date=?, testing_date=?, pilot_date=?, production_date=? WHERE id=?').run(title, projectId, startDate, testingDate, pilotDate, productionDate, req.params.id)
+  res.json(mapSprint(db.prepare('SELECT * FROM sprints WHERE id=?').get(req.params.id)))
+})
+
+app.delete('/api/sprints/:id', (req, res) => {
+  db.prepare('DELETE FROM sprints WHERE id=?').run(req.params.id)
+  res.json({ ok: true })
+})
+
 // ── Resources ─────────────────────────────────────────────────────────────────
+app.get('/api/resources/all', (req, res) => {
+  res.json(db.prepare('SELECT * FROM resources ORDER BY created_at').all().map(mapResource))
+})
+
 app.get('/api/resources', (req, res) => {
   res.json(getAccessibleResources(req.user).map(mapResource))
 })

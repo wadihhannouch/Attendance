@@ -9,6 +9,10 @@ import Leaves from './pages/Leaves.tsx'
 import LeaveForm from './pages/LeaveForm.tsx'
 import CalendarPage from './pages/CalendarPage.tsx'
 import Settings from './pages/Settings.tsx'
+import BRs from './pages/BRs.tsx'
+import BRTracker from './pages/BRTracker.tsx'
+import Sprints from './pages/Sprints.tsx'
+import SprintCalendar from './pages/SprintCalendar.tsx'
 import Login from './pages/Login.tsx'
 import { authApi, authStorage, AuthUser } from './store/api'
 
@@ -78,6 +82,10 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="projects" element={<Projects />} />
           <Route path="projects/:id" element={<ProjectDetail />} />
+          <Route path="brs" element={<BRs />} />
+          <Route path="br-tracker" element={<BRTracker />} />
+          <Route path="sprints" element={<Sprints />} />
+          <Route path="sprint-calendar" element={<SprintCalendar />} />
           <Route path="resources" element={<Resources />} />
           <Route path="leaves" element={<Leaves />} />
           <Route path="leaves/new" element={<LeaveForm />} />

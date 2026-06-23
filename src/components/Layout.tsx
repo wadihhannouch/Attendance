@@ -5,6 +5,10 @@ import { AuthUser } from '../store/api'
 const navItems = [
   { to: '/', label: 'Dashboard', icon: '🏠' },
   { to: '/projects', label: 'Projects', icon: '📁' },
+  { to: '/brs', label: 'BRs', icon: '📋' },
+  { to: '/br-tracker', label: 'BR Tracker', icon: '🎯' },
+  { to: '/sprints', label: 'Sprints', icon: '🏃' },
+  { to: '/sprint-calendar', label: 'Sprint Calendar', icon: '📆' },
   { to: '/resources', label: 'Team Members', icon: '👥' },
   { to: '/leaves', label: 'Leaves', icon: '📅' },
   { to: '/calendar', label: 'Calendar', icon: '🗓️' },

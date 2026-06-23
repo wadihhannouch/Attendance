@@ -1,4 +1,4 @@
-import { Project, Resource, Leave, Settings } from '../types'
+import { Project, Resource, Leave, Settings, BusinessRequirement, BRTrackerEntry, Sprint } from '../types'
 
 const BASE = '/api'
 export const AUTH_TOKEN_KEY = 'attendance_auth_token'
@@ -65,6 +65,10 @@ export const projectsApi = {
 }
 
 // ─── Resources ────────────────────────────────────────────────────────────────
+export const allResourcesApi = {
+  getAll: () => request<Resource[]>('/resources/all'),
+}
+
 export const resourcesApi = {
   getAll: () => request<Resource[]>('/resources'),
   getById: async (id: string) => {
@@ -97,6 +101,36 @@ export const settingsApi = {
   get: () => request<Settings>('/settings'),
   save: (data: Settings) =>
     request<{ ok: boolean }>('/settings', { method: 'PUT', body: JSON.stringify(data) }),
+}
+
+// ─── Business Requirements ────────────────────────────────────────────────────
+export const brsApi = {
+  getAll: () => request<BusinessRequirement[]>('/brs'),
+  create: (data: Omit<BusinessRequirement, 'id' | 'createdAt'>) =>
+    request<BusinessRequirement>('/brs', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: string, data: Partial<Omit<BusinessRequirement, 'id' | 'createdAt'>>) =>
+    request<BusinessRequirement>(`/brs/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  remove: (id: string) => request<{ ok: boolean }>(`/brs/${id}`, { method: 'DELETE' }),
+}
+
+// ─── BR Tracker ───────────────────────────────────────────────────────────────
+export const brTrackerApi = {
+  getAll: () => request<BRTrackerEntry[]>('/br-tracker'),
+  create: (data: Omit<BRTrackerEntry, 'id' | 'createdAt'>) =>
+    request<BRTrackerEntry>('/br-tracker', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: string, data: Partial<Omit<BRTrackerEntry, 'id' | 'createdAt'>>) =>
+    request<BRTrackerEntry>(`/br-tracker/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  remove: (id: string) => request<{ ok: boolean }>(`/br-tracker/${id}`, { method: 'DELETE' }),
+}
+
+// ─── Sprints ──────────────────────────────────────────────────────────────────
+export const sprintsApi = {
+  getAll: () => request<Sprint[]>('/sprints'),
+  create: (data: Omit<Sprint, 'id' | 'createdAt'>) =>
+    request<Sprint>('/sprints', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: string, data: Partial<Omit<Sprint, 'id' | 'createdAt'>>) =>
+    request<Sprint>(`/sprints/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  remove: (id: string) => request<{ ok: boolean }>(`/sprints/${id}`, { method: 'DELETE' }),
 }
 
 // ─── Seed ─────────────────────────────────────────────────────────────────────
