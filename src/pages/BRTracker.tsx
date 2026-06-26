@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { brTrackerApi, brsApi, resourcesApi, projectsApi } from '../store/api'
-import { BRTrackerEntry, BusinessRequirement, Resource, Project } from '../types'
+import { brTrackerApi, brsApi, resourcesApi, projectsApi, sprintsApi } from '../store/api'
+import { BRTrackerEntry, BusinessRequirement, Resource, Project, Sprint } from '../types'
 
 const EMPTY_FORM = {
   brId: '',
@@ -14,6 +14,7 @@ export default function BRTracker() {
   const [brs, setBRs] = useState<BusinessRequirement[]>([])
   const [resources, setResources] = useState<Resource[]>([])
   const [projects, setProjects] = useState<Project[]>([])
+  const [sprints, setSprints] = useState<Sprint[]>([])
 
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<BRTrackerEntry | null>(null)
@@ -21,17 +22,23 @@ export default function BRTracker() {
   const [projectFilter, setProjectFilter] = useState<string>('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
+  // Table-level filters
+  const [tableProjectFilter, setTableProjectFilter] = useState('')
+  const [tableSprintFilter, setTableSprintFilter] = useState('')
+
   useEffect(() => {
     Promise.all([
       brTrackerApi.getAll(),
       brsApi.getAll(),
       resourcesApi.getAll(),
       projectsApi.getAll(),
-    ]).then(([e, b, r, p]) => {
+      sprintsApi.getAll(),
+    ]).then(([e, b, r, p, s]) => {
       setEntries(e)
       setBRs(b)
       setResources(r)
       setProjects(p)
+      setSprints(s)
     })
   }, [])
 
@@ -94,6 +101,19 @@ export default function BRTracker() {
   const getBR = (id: string) => brs.find((b) => b.id === id)
   const getResource = (id: string) => resources.find((r) => r.id === id)
   const getProject = (id: string) => projects.find((p) => p.id === id)
+  const getSprint = (id: string) => sprints.find((s) => s.id === id)
+
+  // Sprints available in the sprint filter (scoped to selected project if any)
+  const sprintOptions = tableProjectFilter
+    ? sprints.filter((s) => s.projectId === tableProjectFilter)
+    : sprints
+
+  const visibleEntries = entries.filter((entry) => {
+    const br = getBR(entry.brId)
+    if (tableProjectFilter && !br?.projectIds.includes(tableProjectFilter)) return false
+    if (tableSprintFilter && br?.sprintId !== tableSprintFilter) return false
+    return true
+  })
 
   return (
     <div className="space-y-5">
@@ -102,8 +122,78 @@ export default function BRTracker() {
         <button onClick={openCreate} className="btn-primary">+ Add Assignment</button>
       </div>
 
+      {/* Table filters */}
+      {entries.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Project pills */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-medium text-gray-400 mr-0.5">Project:</span>
+            <button
+              type="button"
+              onClick={() => { setTableProjectFilter(''); setTableSprintFilter('') }}
+              className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                tableProjectFilter === ''
+                  ? 'bg-gray-800 border-gray-800 text-white'
+                  : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              All
+            </button>
+            {projects.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => { setTableProjectFilter(p.id); setTableSprintFilter('') }}
+                className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                  tableProjectFilter === p.id
+                    ? 'bg-gray-800 border-gray-800 text-white'
+                    : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color }} />
+                {p.name}
+              </button>
+            ))}
+          </div>
+
+          {/* Sprint pills */}
+          {sprintOptions.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-medium text-gray-400 mr-0.5">Sprint:</span>
+              <button
+                type="button"
+                onClick={() => setTableSprintFilter('')}
+                className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                  tableSprintFilter === ''
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                All
+              </button>
+              {sprintOptions.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setTableSprintFilter(s.id)}
+                  className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                    tableSprintFilter === s.id
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  🏃 {s.title}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {entries.length === 0 ? (
         <p className="text-gray-400 text-sm">No assignments yet. Add one to get started.</p>
+      ) : visibleEntries.length === 0 ? (
+        <p className="text-gray-400 text-sm">No assignments match the selected filters.</p>
       ) : (
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           <table className="w-full text-sm">
@@ -118,7 +208,7 @@ export default function BRTracker() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {entries.map((entry) => {
+              {visibleEntries.map((entry) => {
                 const br = getBR(entry.brId)
                 const resource = getResource(entry.resourceId)
                 const assignedProjects = (resource?.projectIds ?? [])

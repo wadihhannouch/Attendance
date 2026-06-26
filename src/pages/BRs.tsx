@@ -22,6 +22,10 @@ export default function BRs() {
   const [formError, setFormError] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
+  // Table-level filters
+  const [tableProjectFilter, setTableProjectFilter] = useState('')
+  const [tableSprintFilter, setTableSprintFilter] = useState('')
+
   useEffect(() => {
     Promise.all([brsApi.getAll(), projectsApi.getAll(), sprintsApi.getAll()]).then(([b, p, s]) => {
       setBRs(b); setProjects(p); setSprints(s)
@@ -89,6 +93,16 @@ export default function BRs() {
   const getProjects = (ids: string[]) => ids.map((id) => projects.find((p) => p.id === id)).filter(Boolean) as Project[]
   const getSprint = (id: string | null) => id ? sprints.find(s => s.id === id) : undefined
 
+  const sprintOptions = tableProjectFilter
+    ? sprints.filter(s => s.projectId === tableProjectFilter)
+    : sprints
+
+  const visibleBRs = brs.filter(br => {
+    if (tableProjectFilter && !br.projectIds.includes(tableProjectFilter)) return false
+    if (tableSprintFilter && br.sprintId !== tableSprintFilter) return false
+    return true
+  })
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -96,11 +110,79 @@ export default function BRs() {
         <button onClick={openCreate} className="btn-primary">+ New BR</button>
       </div>
 
+      {/* Filters */}
+      {brs.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-medium text-gray-400 mr-0.5">Project:</span>
+            <button
+              type="button"
+              onClick={() => { setTableProjectFilter(''); setTableSprintFilter('') }}
+              className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                tableProjectFilter === ''
+                  ? 'bg-gray-800 border-gray-800 text-white'
+                  : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              All
+            </button>
+            {projects.map(p => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => { setTableProjectFilter(p.id); setTableSprintFilter('') }}
+                className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                  tableProjectFilter === p.id
+                    ? 'bg-gray-800 border-gray-800 text-white'
+                    : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color }} />
+                {p.name}
+              </button>
+            ))}
+          </div>
+
+          {sprintOptions.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-medium text-gray-400 mr-0.5">Sprint:</span>
+              <button
+                type="button"
+                onClick={() => setTableSprintFilter('')}
+                className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                  tableSprintFilter === ''
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                All
+              </button>
+              {sprintOptions.map(s => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setTableSprintFilter(s.id)}
+                  className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                    tableSprintFilter === s.id
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  🏃 {s.title}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {brs.length === 0 ? (
         <p className="text-gray-400 text-sm">No business requirements yet. Create one to get started.</p>
+      ) : visibleBRs.length === 0 ? (
+        <p className="text-gray-400 text-sm">No BRs match the selected filters.</p>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {brs.map((br) => {
+          {visibleBRs.map((br) => {
             const assignedProjects = getProjects(br.projectIds)
             const sprint = getSprint(br.sprintId)
             return (

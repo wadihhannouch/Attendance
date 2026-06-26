@@ -22,6 +22,7 @@ export default function Sprints() {
   const [form, setForm] = useState(EMPTY_FORM)
   const [formError, setFormError] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [projectFilter, setProjectFilter] = useState('')
 
   useEffect(() => {
     Promise.all([sprintsApi.getAll(), projectsApi.getAll()]).then(([s, p]) => {
@@ -76,6 +77,10 @@ export default function Sprints() {
 
   const getProject = (id: string) => projects.find((p) => p.id === id)
 
+  const visibleSprints = projectFilter
+    ? sprints.filter(s => s.projectId === projectFilter)
+    : sprints
+
   const field = (key: keyof typeof EMPTY_FORM) => ({
     value: form[key],
     onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
@@ -89,8 +94,43 @@ export default function Sprints() {
         <button onClick={openCreate} className="btn-primary">+ New Sprint</button>
       </div>
 
+      {/* Project filter */}
+      {sprints.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs font-medium text-gray-400 mr-0.5">Project:</span>
+          <button
+            type="button"
+            onClick={() => setProjectFilter('')}
+            className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+              projectFilter === ''
+                ? 'bg-gray-800 border-gray-800 text-white'
+                : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            All
+          </button>
+          {projects.map(p => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => setProjectFilter(p.id)}
+              className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                projectFilter === p.id
+                  ? 'bg-gray-800 border-gray-800 text-white'
+                  : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color }} />
+              {p.name}
+            </button>
+          ))}
+        </div>
+      )}
+
       {sprints.length === 0 ? (
         <p className="text-gray-400 text-sm">No sprints yet. Create one to get started.</p>
+      ) : visibleSprints.length === 0 ? (
+        <p className="text-gray-400 text-sm">No sprints match the selected project.</p>
       ) : (
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           <table className="w-full text-sm">
@@ -106,7 +146,7 @@ export default function Sprints() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {sprints.map((sprint) => {
+              {visibleSprints.map((sprint) => {
                 const project = getProject(sprint.projectId)
                 return (
                   <tr key={sprint.id} className="hover:bg-gray-50">

@@ -60,7 +60,7 @@ export default function ProjectDetail() {
               {members.map((r) => (
                 <li key={r.id} className="flex items-center justify-between text-sm">
                   <div>
-                    <span className="font-medium text-gray-800">{r.name}</span>
+                    <Link to={`/resources/${r.id}`} className="font-medium text-gray-800 hover:text-blue-600 hover:underline">{r.name}</Link>
                     <span className="ml-2 text-gray-500">{r.role}</span>
                   </div>
                   <button onClick={() => removeMember(r.id)} className="text-xs text-red-500 hover:text-red-700">Remove</button>
@@ -80,7 +80,7 @@ export default function ProjectDetail() {
               {nonMembers.map((r) => (
                 <li key={r.id} className="flex items-center justify-between text-sm">
                   <div>
-                    <span className="font-medium text-gray-800">{r.name}</span>
+                    <Link to={`/resources/${r.id}`} className="font-medium text-gray-800 hover:text-blue-600 hover:underline">{r.name}</Link>
                     <span className="ml-2 text-gray-500">{r.role}</span>
                   </div>
                   <button onClick={() => addMember(r.id)} className="text-xs text-blue-600 hover:text-blue-800 font-medium">+ Add</button>

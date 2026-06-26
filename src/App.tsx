@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard.tsx'
 import Projects from './pages/Projects.tsx'
 import ProjectDetail from './pages/ProjectDetail.tsx'
 import Resources from './pages/Resources.tsx'
+import MemberDetail from './pages/MemberDetail.tsx'
 import Leaves from './pages/Leaves.tsx'
 import LeaveForm from './pages/LeaveForm.tsx'
 import CalendarPage from './pages/CalendarPage.tsx'
@@ -87,6 +88,7 @@ export default function App() {
           <Route path="sprints" element={<Sprints />} />
           <Route path="sprint-calendar" element={<SprintCalendar />} />
           <Route path="resources" element={<Resources />} />
+          <Route path="resources/:id" element={<MemberDetail />} />
           <Route path="leaves" element={<Leaves />} />
           <Route path="leaves/new" element={<LeaveForm />} />
           <Route path="leaves/:id/edit" element={<LeaveForm />} />

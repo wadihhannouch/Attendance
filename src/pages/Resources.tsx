@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useOutletContext, Link } from 'react-router-dom'
 import { resourcesApi, projectsApi, settingsApi } from '../store/api'
 import { Resource, Project } from '../types'
 import { AuthUser } from '../store/api'
@@ -7,6 +7,8 @@ import { AuthUser } from '../store/api'
 type ResourcesOutletContext = {
   currentUser: AuthUser | null
 }
+
+const PLATFORM_ROLES = ['Android', 'iOS', 'MAS'] as const
 
 const EMPTY_FORM = {
   name: '',
@@ -33,9 +35,11 @@ export default function Resources() {
   const [form, setForm] = useState({ ...EMPTY_FORM, annualLeaveBalance: defaultQuota })
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
+  const isAdmin = currentUser?.role === 'Admin' || currentUser?.role === 'SuperUser'
+
   const openCreate = () => {
     setEditing(null)
-    setForm({ ...EMPTY_FORM, role: currentUser?.role ?? '', annualLeaveBalance: defaultQuota })
+    setForm({ ...EMPTY_FORM, role: isAdmin ? '' : (currentUser?.role ?? ''), annualLeaveBalance: defaultQuota })
     setShowModal(true)
   }
 
@@ -107,6 +111,7 @@ export default function Resources() {
                     <span className="inline-block bg-blue-50 text-blue-700 text-xs font-semibold px-2 py-0.5 rounded">{r.annualLeaveBalance} days</span>
                   </td>
                   <td className="px-4 py-3 text-right">
+                    <Link to={`/resources/${r.id}`} className="text-blue-600 hover:text-blue-800 mr-3">Details</Link>
                     <button onClick={() => openEdit(r)} className="text-gray-500 hover:text-gray-700 mr-3">Edit</button>
                     <button onClick={() => setDeleteId(r.id)} className="text-red-400 hover:text-red-600">Delete</button>
                   </td>
@@ -132,13 +137,29 @@ export default function Resources() {
               </div>
               <div>
                 <label className="label">Role / Title</label>
-                <input
-                  className="input bg-gray-100 text-gray-600"
-                  value={currentUser?.role ?? form.role}
-                  readOnly
-                  tabIndex={-1}
-                />
-                <p className="mt-1 text-xs text-gray-400">This is taken from your login role.</p>
+                {isAdmin ? (
+                  <select
+                    className="input"
+                    required
+                    value={form.role}
+                    onChange={(e) => setForm({ ...form, role: e.target.value })}
+                  >
+                    <option value="" disabled>Select platform…</option>
+                    {PLATFORM_ROLES.map(r => (
+                      <option key={r} value={r}>{r}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <>
+                    <input
+                      className="input bg-gray-100 text-gray-600"
+                      value={currentUser?.role ?? form.role}
+                      readOnly
+                      tabIndex={-1}
+                    />
+                    <p className="mt-1 text-xs text-gray-400">This is taken from your login role.</p>
+                  </>
+                )}
               </div>
               <div>
                 <label className="label">Annual Leave Balance (days)</label>

@@ -1,8 +1,45 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { leavesApi, resourcesApi, projectsApi, settingsApi } from '../store/api'
-import { Leave, Resource, Project, Settings, PublicHoliday } from '../types'
+import { leavesApi, resourcesApi, projectsApi, settingsApi, sprintsApi, brsApi, brTrackerApi } from '../store/api'
+import { Leave, Resource, Project, Settings, PublicHoliday, Sprint, BusinessRequirement, BRTrackerEntry } from '../types'
 import { isWithinInterval, parseISO, addDays, format, differenceInCalendarDays, differenceInBusinessDays } from 'date-fns'
+
+// Gulf work week: Friday (5) and Saturday (6) are weekends
+function parseLocal(iso: string): Date {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
+function toIso(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function getSprintWorkingDays(startIso: string, endIso: string): Date[] {
+  const days: Date[] = []
+  const cur = parseLocal(startIso)
+  const end = parseLocal(endIso)
+  while (cur <= end) {
+    const dow = cur.getDay()
+    if (dow !== 5 && dow !== 6) days.push(new Date(cur))
+    cur.setDate(cur.getDate() + 1)
+  }
+  return days
+}
+
+interface IdleSlot {
+  resourceId: string
+  resourceName: string
+  resourceRole: string
+  projectId: string
+  projectName: string
+  projectColor: string
+  sprintId: string
+  sprintTitle: string
+  idleDays: number
+  totalWorkingDays: number
+  vacationDays: number
+  allocatedDays: number
+}
 
 export default function Dashboard() {
   const today = useMemo(() => new Date(), [])
@@ -13,12 +50,20 @@ export default function Dashboard() {
   const [resources, setResources] = useState<Resource[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [settings, setSettings] = useState<Settings>({ leaveTypes: [], defaultAnnualQuota: 21, publicHolidays: [] })
+  const [sprints, setSprints] = useState<Sprint[]>([])
+  const [brs, setBRs] = useState<BusinessRequirement[]>([])
+  const [trackerEntries, setTrackerEntries] = useState<BRTrackerEntry[]>([])
+  const [idleProjectFilter, setIdleProjectFilter] = useState('all')
+  const [idleExpanded, setIdleExpanded] = useState(true)
 
   useEffect(() => {
     leavesApi.getAll().then(setLeaves)
     resourcesApi.getAll().then(setResources)
     projectsApi.getAll().then(setProjects)
     settingsApi.get().then(setSettings)
+    sprintsApi.getAll().then(setSprints).catch(() => {})
+    brsApi.getAll().then(setBRs).catch(() => {})
+    brTrackerApi.getAll().then(setTrackerEntries).catch(() => {})
   }, [])
 
   const getResource = (id: string) => resources.find((r) => r.id === id)
@@ -62,6 +107,62 @@ export default function Dashboard() {
     .sort((a, b) => a.startDate.localeCompare(b.startDate))[0]
   const holidayCountdown = nextHoliday ? Math.max(0, differenceInCalendarDays(parseISO(nextHoliday.startDate), today)) : null
 
+  const idleSlots = useMemo<IdleSlot[]>(() => {
+    if (!sprints.length || !resources.length) return []
+    const slots: IdleSlot[] = []
+    for (const sprint of sprints) {
+      const project = projects.find(p => p.id === sprint.projectId)
+      if (!project) continue
+      const sprintBRIds = new Set(brs.filter(b => b.sprintId === sprint.id).map(b => b.id))
+      if (!sprintBRIds.size) continue
+      const workingDays = getSprintWorkingDays(sprint.startDate, sprint.pilotDate)
+      if (!workingDays.length) continue
+      const workingDayStrs = new Set(workingDays.map(toIso))
+      const sprintResources = resources.filter(r => r.projectIds.includes(sprint.projectId))
+      for (const resource of sprintResources) {
+        let vacationCount = 0
+        for (const leave of leaves) {
+          if (leave.resourceId !== resource.id || leave.status !== 'approved') continue
+          const cur = parseLocal(leave.startDate)
+          const end = parseLocal(leave.endDate)
+          while (cur <= end) {
+            if (workingDayStrs.has(toIso(cur))) vacationCount++
+            cur.setDate(cur.getDate() + 1)
+          }
+        }
+        const availableDays = workingDays.length - vacationCount
+        const rawAllocated = trackerEntries
+          .filter(e => e.resourceId === resource.id && sprintBRIds.has(e.brId))
+          .reduce((sum, e) => sum + e.timelineDays, 0)
+        const allocatedDays = Math.min(rawAllocated, availableDays)
+        const idleDays = Math.max(0, availableDays - allocatedDays)
+        if (idleDays > 0) {
+          slots.push({
+            resourceId: resource.id,
+            resourceName: resource.name,
+            resourceRole: resource.role,
+            projectId: project.id,
+            projectName: project.name,
+            projectColor: project.color,
+            sprintId: sprint.id,
+            sprintTitle: sprint.title,
+            idleDays,
+            totalWorkingDays: workingDays.length,
+            vacationDays: vacationCount,
+            allocatedDays,
+          })
+        }
+      }
+    }
+    return slots.sort((a, b) => b.idleDays - a.idleDays)
+  }, [sprints, brs, trackerEntries, resources, projects, leaves])
+
+  const filteredIdleSlots = idleProjectFilter === 'all'
+    ? idleSlots
+    : idleSlots.filter(s => s.projectId === idleProjectFilter)
+
+  const idleFilterProjects = projects.filter(p => idleSlots.some(s => s.projectId === p.id))
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -71,10 +172,10 @@ export default function Dashboard() {
 
       {/* Global summary strip */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Projects" value={projects.length} color="blue" />
-        <StatCard label="Team Members" value={resources.length} color="green" />
-        <StatCard label="Out Today" value={totalOut} color="red" />
-        <StatCard label="Pending Leaves" value={totalPending} color="yellow" />
+        <StatCard label="Projects" value={projects.length} color="blue" to="/projects" />
+        <StatCard label="Team Members" value={resources.length} color="green" to="/resources" />
+        <StatCard label="Out Today" value={totalOut} color="red" to="/leaves" />
+        <StatCard label="Pending Leaves" value={totalPending} color="yellow" to="/leaves" />
       </div>
 
       {nextHoliday && holidayCountdown !== null && (
@@ -97,6 +198,70 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Idle Time Slots per Sprint */}
+      {idleSlots.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-gray-100">
+            <div>
+              <h3 className="text-base font-semibold text-gray-800">Developer Idle Time per Sprint</h3>
+              <p className="text-xs text-gray-400 mt-0.5">Developers with unallocated working days in active sprints</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {idleExpanded && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setIdleProjectFilter('all')}
+                    className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                      idleProjectFilter === 'all'
+                        ? 'bg-gray-800 border-gray-800 text-white'
+                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    All Projects
+                  </button>
+                  {idleFilterProjects.map(p => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setIdleProjectFilter(p.id)}
+                      className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                        idleProjectFilter === p.id
+                          ? 'bg-gray-800 border-gray-800 text-white'
+                          : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color }} />
+                      {p.name}
+                    </button>
+                  ))}
+                </>
+              )}
+              <button
+                type="button"
+                onClick={() => setIdleExpanded(v => !v)}
+                className="inline-flex items-center rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
+              >
+                {idleExpanded ? 'Collapse ↑' : `Expand ↓ · ${idleSlots.length} slot${idleSlots.length === 1 ? '' : 's'}`}
+              </button>
+            </div>
+          </div>
+          {idleExpanded && (
+            <div className="p-4">
+              {filteredIdleSlots.length === 0 ? (
+                <p className="text-sm text-gray-400">No idle time for the selected project.</p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                  {filteredIdleSlots.map(slot => (
+                    <IdleSlotCard key={`${slot.resourceId}-${slot.sprintId}`} slot={slot} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -269,7 +434,7 @@ function ProjectCard({ project, resources, leaves, today, isOutToday, isUpcoming
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${out ? 'bg-red-400' : coveringFor ? 'bg-blue-400' : 'bg-green-400'}`} />
-                      <span className="font-medium text-gray-800">{m.name}</span>
+                      <Link to={`/resources/${m.id}`} className="font-medium text-gray-800 hover:text-blue-600 hover:underline">{m.name}</Link>
                       <span className="text-gray-400 text-xs">{m.role}</span>
                     </div>
                     <div className="text-right">
@@ -440,17 +605,65 @@ function ProjectCard({ project, resources, leaves, today, isOutToday, isUpcoming
   )
 }
 
-function StatCard({ label, value, color }: { label: string; value: number; color: 'blue' | 'green' | 'red' | 'yellow' }) {
+function IdleSlotCard({ slot }: { slot: IdleSlot }) {
+  return (
+    <Link to={`/resources/${slot.resourceId}`} className="bg-white rounded-xl border border-gray-200 p-4 space-y-3 block hover:border-blue-300 hover:shadow-sm transition-all">
+      <div className="flex items-center gap-2.5">
+        <span className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-sm font-bold text-gray-600 flex-shrink-0">
+          {slot.resourceName.charAt(0).toUpperCase()}
+        </span>
+        <div className="min-w-0">
+          <p className="font-semibold text-gray-800 text-sm truncate">{slot.resourceName}</p>
+          <p className="text-xs text-gray-400 truncate">{slot.resourceRole}</p>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-1.5 text-xs text-gray-600">
+        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: slot.projectColor }} />
+        <span className="font-medium truncate">{slot.projectName}</span>
+      </div>
+
+      <p className="text-xs text-gray-500 truncate">
+        Sprint: <span className="font-medium text-gray-700">{slot.sprintTitle}</span>
+      </p>
+
+      <div className="pt-2 border-t border-gray-100">
+        <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1">Idle Duration</p>
+        <p className="text-2xl font-bold text-orange-500 leading-none">
+          {slot.idleDays}
+          <span className="text-sm font-medium text-gray-400 ml-1">day{slot.idleDays === 1 ? '' : 's'}</span>
+        </p>
+        <p className="text-xs text-gray-400 mt-1.5">
+          {slot.totalWorkingDays}d sprint · {slot.vacationDays}d leave · {slot.allocatedDays}d assigned
+        </p>
+      </div>
+    </Link>
+  )
+}
+
+function StatCard({ label, value, color, to }: { label: string; value: number; color: 'blue' | 'green' | 'red' | 'yellow'; to?: string }) {
   const colors = {
     blue: 'bg-blue-50 text-blue-700 border-blue-100',
     green: 'bg-green-50 text-green-700 border-green-100',
     red: 'bg-red-50 text-red-700 border-red-100',
     yellow: 'bg-yellow-50 text-yellow-700 border-yellow-100',
   }
-  return (
-    <div className={`rounded-xl border p-4 ${colors[color]}`}>
+  const content = (
+    <>
       <p className="text-2xl font-bold">{value}</p>
       <p className="text-sm font-medium mt-0.5 opacity-80">{label}</p>
+    </>
+  )
+  if (to) {
+    return (
+      <Link to={to} className={`rounded-xl border p-4 block transition-opacity hover:opacity-80 ${colors[color]}`}>
+        {content}
+      </Link>
+    )
+  }
+  return (
+    <div className={`rounded-xl border p-4 ${colors[color]}`}>
+      {content}
     </div>
   )
 }

@@ -180,7 +180,9 @@ export default function Leaves() {
                   const deputy = l.deputyId ? getResource(l.deputyId) : undefined
                   return (
                     <tr key={l.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 font-medium text-gray-800">{res?.name ?? '—'}</td>
+                      <td className="px-4 py-3 font-medium text-gray-800">
+                        {res ? <Link to={`/resources/${res.id}`} className="hover:text-blue-600 hover:underline">{res.name}</Link> : '—'}
+                      </td>
                       <td className="px-4 py-3 capitalize text-gray-600">{l.type === 'other' && l.otherLabel ? l.otherLabel : l.type}</td>
                       <td className="px-4 py-3 text-gray-600">{format(parseISO(l.startDate), 'dd MMM yyyy')}</td>
                       <td className="px-4 py-3 text-gray-600">{format(parseISO(l.endDate), 'dd MMM yyyy')}</td>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { sprintsApi, brsApi, brTrackerApi, allResourcesApi, resourcesApi, leavesApi } from '../store/api'
 import { Sprint, BusinessRequirement, BRTrackerEntry, Resource, Leave } from '../types'
 
@@ -72,6 +73,39 @@ function buildAllocation(
   return alloc
 }
 
+type Segment =
+  | { type: 'vacation'; span: number }
+  | { type: 'br'; brId: string; span: number }
+  | { type: 'empty'; span: number }
+
+function buildSegments(
+  workingDays: Date[],
+  alloc: Map<string, string>,
+  vacation: Set<string>
+): Segment[] {
+  const segments: Segment[] = []
+  for (const day of workingDays) {
+    const ds = toIso(day)
+    if (vacation.has(ds)) {
+      const last = segments[segments.length - 1]
+      if (last?.type === 'vacation') { last.span++; continue }
+      segments.push({ type: 'vacation', span: 1 })
+    } else {
+      const brId = alloc.get(ds)
+      if (brId) {
+        const last = segments[segments.length - 1]
+        if (last?.type === 'br' && last.brId === brId) { last.span++; continue }
+        segments.push({ type: 'br', brId, span: 1 })
+      } else {
+        const last = segments[segments.length - 1]
+        if (last?.type === 'empty') { last.span++; continue }
+        segments.push({ type: 'empty', span: 1 })
+      }
+    }
+  }
+  return segments
+}
+
 const DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 const MILESTONES = [
@@ -122,13 +156,23 @@ export default function SprintCalendar() {
     return map
   }, [sprintResources, leaves, workingDayStrs])
 
+  const sprintBRIds = useMemo(
+    () => new Set(brs.filter(b => b.sprintId === selectedId).map(b => b.id)),
+    [brs, selectedId]
+  )
+
+  const sprintTrackerEntries = useMemo(
+    () => trackerEntries.filter(e => sprintBRIds.has(e.brId)),
+    [trackerEntries, sprintBRIds]
+  )
+
   const allocations = useMemo(() => {
     const map = new Map<string, Map<string, string>>()
     for (const r of sprintResources) {
-      map.set(r.id, buildAllocation(r.id, trackerEntries, vacationSets.get(r.id) ?? new Set(), workingDays))
+      map.set(r.id, buildAllocation(r.id, sprintTrackerEntries, vacationSets.get(r.id) ?? new Set(), workingDays))
     }
     return map
-  }, [sprintResources, trackerEntries, vacationSets, workingDays])
+  }, [sprintResources, sprintTrackerEntries, vacationSets, workingDays])
 
   const monthGroups = useMemo(() => {
     const groups: { label: string; count: number }[] = []
@@ -296,38 +340,29 @@ export default function SprintCalendar() {
                     const vacation = vacationSets.get(resource.id) ?? new Set<string>()
                     const isLast  = ri === sprintResources.length - 1
 
-                    // Track which brId is active to detect first-day-of-block for showing label
-                    let prevBrId: string | undefined
-
                     return (
                       <tr key={resource.id}>
                         {/* Sticky developer cell */}
                         <td className={`sticky left-0 z-20 bg-white px-3 py-2 border-r border-gray-200 ${!isLast ? 'border-b' : ''}`}>
-                          <div className="flex items-center gap-2">
-                            <span className="w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-[11px] font-bold text-gray-600 flex-shrink-0">
+                          <Link to={`/resources/${resource.id}`} className="flex items-center gap-2 group">
+                            <span className="w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-[11px] font-bold text-gray-600 flex-shrink-0 group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors">
                               {resource.name.charAt(0).toUpperCase()}
                             </span>
                             <div className="min-w-0">
-                              <p className="font-medium text-gray-800 text-xs truncate leading-tight">{resource.name}</p>
+                              <p className="font-medium text-gray-800 text-xs truncate leading-tight group-hover:text-blue-600 transition-colors">{resource.name}</p>
                               <p className="text-[10px] text-gray-400 truncate">{resource.role}</p>
                             </div>
-                          </div>
+                          </Link>
                         </td>
 
-                        {/* Day cells */}
-                        {workingDays.map((day, di) => {
-                          const ds        = toIso(day)
-                          const isVacation = vacation.has(ds)
-                          const brId      = alloc.get(ds)
-                          const br        = brId ? getBR(brId) : undefined
-                          const isFirst   = brId !== prevBrId  // first day of this BR block
-                          prevBrId = brId
+                        {/* Day cells — consecutive same-BR days merged */}
+                        {buildSegments(workingDays, alloc, vacation).map((seg, si, arr) => {
+                          const borderB = !isLast ? 'border-b border-gray-100' : ''
+                          const borderR = si === arr.length - 1 ? '' : 'border-r border-gray-200'
 
-                          const borderClasses = `border-r border-gray-200 ${!isLast ? 'border-b' : ''} ${di === workingDays.length - 1 ? 'border-r-0' : ''}`
-
-                          if (isVacation) {
+                          if (seg.type === 'vacation') {
                             return (
-                              <td key={ds} className={`p-0 ${borderClasses}`} title={`${resource.name}: On leave`}>
+                              <td key={si} colSpan={seg.span} className={`p-0 ${borderR} ${borderB}`} title={`${resource.name}: On leave`}>
                                 <div
                                   className="h-10"
                                   style={{ background: 'repeating-linear-gradient(45deg,#fff7ed,#fff7ed 4px,#fed7aa 4px,#fed7aa 8px)' }}
@@ -336,25 +371,24 @@ export default function SprintCalendar() {
                             )
                           }
 
-                          if (br) {
+                          if (seg.type === 'br') {
+                            const br = getBR(seg.brId)
+                            if (!br) return (
+                              <td key={si} colSpan={seg.span} className={`p-0 ${borderR} ${borderB}`}>
+                                <div className="h-10 bg-white" />
+                              </td>
+                            )
                             return (
-                              <td key={ds} className={`p-0 ${borderClasses}`} title={`${br.reference}: ${br.title}`}>
-                                <div
-                                  className="h-10 flex items-center justify-center overflow-hidden"
-                                  style={{ backgroundColor: br.color, opacity: isFirst ? 1 : 0.82 }}
-                                >
-                                  {isFirst && (
-                                    <span className="text-white text-[10px] font-bold px-0.5 truncate leading-tight">
-                                      {br.reference.length > 7 ? br.reference.slice(0, 6) + '…' : br.reference}
-                                    </span>
-                                  )}
+                              <td key={si} colSpan={seg.span} className={`p-0 ${borderR} ${borderB}`} title={`${br.reference}: ${br.title}`}>
+                                <div className="h-10 flex items-center px-2 overflow-hidden" style={{ backgroundColor: br.color }}>
+                                  <span className="text-white text-[11px] font-semibold truncate leading-tight">{br.title}</span>
                                 </div>
                               </td>
                             )
                           }
 
                           return (
-                            <td key={ds} className={`p-0 ${borderClasses}`}>
+                            <td key={si} colSpan={seg.span} className={`p-0 ${borderR} ${borderB}`}>
                               <div className="h-10 bg-white" />
                             </td>
                           )
